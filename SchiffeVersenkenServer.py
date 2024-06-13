@@ -11,8 +11,7 @@ class ShipGameServer(tk.Tk):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.bind((self.host, self.port))
         self.sock.listen(1)
-        self.conn, self.addr = self.sock.accept()
-        print(f"Connected by {self.addr}")
+        self.conn, self.addr = None, None
         
         self.size = 10
         self.ships = [(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")]
@@ -23,6 +22,11 @@ class ShipGameServer(tk.Tk):
         self.ship_positions = {name: [] for _, name in self.ships}
         self.create_widgets()
         
+        threading.Thread(target=self.wait_for_connection, daemon=True).start()
+
+    def wait_for_connection(self):
+        self.conn, self.addr = self.sock.accept()
+        print(f"Connected by {self.addr}")
         threading.Thread(target=self.receive_data, daemon=True).start()
 
     def create_widgets(self):
@@ -68,10 +72,7 @@ class ShipGameServer(tk.Tk):
                 self.buttons[x][y + i].config(bg="red")
                 positions.append((x, y + i))
         self.ship_positions[self.current_ship_name] = positions
-        if all(len(row) == self.size and row.count("S") == size for row in self.placedships_board):
-            messagebox.showinfo("Fertig!", f"Spieler {self.player} hat alle Schiffe platziert.")
-            self.send_data("PLACEMENT", self.placedships_board, self.ship_positions)
-            self.destroy()
+        self.check_all_ships_placed()
 
     def next_ship(self):
         self.current_ship_index += 1
@@ -79,13 +80,18 @@ class ShipGameServer(tk.Tk):
             self.current_ship_size, self.current_ship_name = self.ships[self.current_ship_index]
             self.info_label.config(text=f"Platziere dein {self.current_ship_name} ({self.current_ship_size} Felder)")
         else:
+            self.check_all_ships_placed()
+
+    def check_all_ships_placed(self):
+        if self.current_ship_index >= len(self.ships):
             messagebox.showinfo("Fertig!", f"Spieler {self.player} hat alle Schiffe platziert.")
             self.send_data("PLACEMENT", self.placedships_board, self.ship_positions)
             self.destroy()
 
     def send_data(self, data_type, board, positions):
-        data = f"{data_type}|{board}|{positions}"
-        self.conn.sendall(data.encode())
+        if self.conn:
+            data = f"{data_type}|{board}|{positions}"
+            self.conn.sendall(data.encode())
 
     def receive_data(self):
         while True:
@@ -97,8 +103,8 @@ class ShipGameServer(tk.Tk):
                 self.start_game_phase(board, positions)
 
     def start_game_phase(self, board, positions):
-        self.player2_board = board
-        self.player2_ships = positions
+        self.player2_board = eval(board)
+        self.player2_ships = eval(positions)
         self.start_game()
 
     def start_game(self):

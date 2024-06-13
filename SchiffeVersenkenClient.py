@@ -58,17 +58,14 @@ class ShipGameClient(tk.Tk):
         for i in range(size):
             if x + size <= self.size:
                 self.placedships_board[x + i][y] = "S"
-                self.buttons[x + i][y].config(bg="blue")
+                self.buttons[x + i][y].config(bg="red")
                 positions.append((x + i, y))
             elif y + size <= self.size:
                 self.placedships_board[x][y + i] = "S"
-                self.buttons[x][y + i].config(bg="blue")
+                self.buttons[x][y + i].config(bg="red")
                 positions.append((x, y + i))
         self.ship_positions[self.current_ship_name] = positions
-        if all(len(row) == self.size and row.count("S") == size for row in self.placedships_board):
-            messagebox.showinfo("Fertig!", f"Spieler {self.player} hat alle Schiffe platziert.")
-            self.send_data("PLACEMENT", self.placedships_board, self.ship_positions)
-            self.destroy()
+        self.check_all_ships_placed()
 
     def next_ship(self):
         self.current_ship_index += 1
@@ -76,6 +73,10 @@ class ShipGameClient(tk.Tk):
             self.current_ship_size, self.current_ship_name = self.ships[self.current_ship_index]
             self.info_label.config(text=f"Platziere dein {self.current_ship_name} ({self.current_ship_size} Felder)")
         else:
+            self.check_all_ships_placed()
+
+    def check_all_ships_placed(self):
+        if self.current_ship_index >= len(self.ships):
             messagebox.showinfo("Fertig!", f"Spieler {self.player} hat alle Schiffe platziert.")
             self.send_data("PLACEMENT", self.placedships_board, self.ship_positions)
             self.destroy()
@@ -94,8 +95,8 @@ class ShipGameClient(tk.Tk):
                 self.start_game_phase(board, positions)
 
     def start_game_phase(self, board, positions):
-        self.player1_board = board
-        self.player1_ships = positions
+        self.player1_board = eval(board)
+        self.player1_ships = eval(positions)
         self.start_game()
 
     def start_game(self):
@@ -106,7 +107,7 @@ class ShipGameClient(tk.Tk):
 
     def player2_turn(self, x, y, btn):
         if self.player1_board[x][y] == "S":
-            btn.config(bg="red")
+            btn.config(bg="blue")
             messagebox.showinfo("Treffer!", "Versenkt!")
             self.player1_board[x][y] = "H"
             ship_name = self.check_sunk_ship(x, y, self.player1_ships)
@@ -133,7 +134,7 @@ class ShipGameClient(tk.Tk):
                 btn = tk.Button(window, text="", width=2, height=1)
                 btn.grid(row=i, column=j)
                 if board[i][j] == "H":
-                    btn.config(bg="red")
+                    btn.config(bg="blue")
                 elif board[i][j] == "M":
                     btn.config(bg="black")
                 else:
