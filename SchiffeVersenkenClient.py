@@ -6,6 +6,7 @@ from tkinter import messagebox
 class ShipGameClient(tk.Tk):
     def __init__(self, host, port):
         super().__init__()
+        self.title("Client: Schiffspiel")
         self.host = host
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -101,7 +102,7 @@ class ShipGameClient(tk.Tk):
 
     def start_game(self):
         self.player_guess_window = tk.Tk()
-        self.player_guess_window.title("Spieler 2: Schiffe erraten")
+        self.player_guess_window.title("Client: Spieler 2 errät Schiffe")
         self.create_guess_board(self.player_guess_window, self.player1_board, self.player2_turn)
         self.player_guess_window.mainloop()
 
