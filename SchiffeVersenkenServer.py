@@ -1,17 +1,16 @@
 import socket
-import threading
 import pickle
 import tkinter as tk
 from tkinter import messagebox
 
 class ShipGameServer:
-    def __init__(self, host='127.0.0.1', port=8080):
+    def __init__(self, host="localhost", port=8080):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind((host, port))
         self.server_socket.listen(1)
-        print("Warte auf Verbindung von Client...")
+        print("Warten auf Spieler 2...")
         self.conn, self.addr = self.server_socket.accept()
-        print(f"Verbunden mit: {self.addr}")
+        print(f"Spieler 2 verbunden von {self.addr}")
         self.start_ship_placement_for_player1()
 
     def send_data(self, data):
@@ -28,13 +27,17 @@ class ShipGameServer:
         self.player1_board = board
         self.player1_ships = ships
         print("Spieler 1 hat Schiffe platziert.")
-        self.send_data((board, ships))
-        self.start_game_phase()
+        self.start_ship_placement_for_player2()
 
-    def start_game_phase(self):
+    def start_ship_placement_for_player2(self):
         data = self.receive_data()
         self.player2_board = data[0]
         self.player2_ships = data[1]
+        print("Spieler 2 hat Schiffe platziert.")
+        self.start_game_phase()
+
+    def start_game_phase(self):
+        self.send_data((self.player1_board, self.player1_ships))
         self.game_phase = GamePhase(size=10, player1_board=self.player1_board, player2_board=self.player2_board, player1_ships=self.player1_ships, player2_ships=self.player2_ships, server=True, conn=self.conn)
         self.game_phase.start_game()
 
@@ -157,7 +160,8 @@ class GamePhase:
                     messagebox.showinfo("Spieler 1 gewinnt!", "Alle Schiffe von Spieler 2 sind versenkt!")
                     self.player_guess_window.destroy()
                 else:
-                    self.current_player = 1  # Spieler 1 geht weiter
+                    self.send_data((x, y))
+                    self.current_player = 2  # Spielerwechsel zu Spieler 2
                     self.player_guess_window.destroy()
                     self.start_player_turn()
             else:
@@ -167,49 +171,67 @@ class GamePhase:
                 btn.config(bg="black")
             self.player2_board[x][y] = "M"  # Als Verfehlt markieren
             if not network:
-                self.current_player = 2  # Spieler 2 geht weiter
+                self.send_data((x, y))
+                self.current_player = 2  # Spielerwechsel zu Spieler 2
                 self.player_guess_window.destroy()
                 self.start_player_turn()
             else:
                 self.send_data((x, y))
 
-    def player2_turn(self, x, y, btn):
-        self.send_data((x, y))
+    def player2_turn(self, x, y, btn, network=False):
+        if self.player1_board[x][y] == "S":
+            if not network:
+                btn.config(bg="red")
+            self.player1_board[x][y] = "H"
+            self.player2_hits += 1
+            ship_name = self.check_sunk_ship(x, y, self.player1_ships)
+            if not network:
+                if ship_name:
+                    messagebox.showinfo("Versenkt!", f"{ship_name} versenkt!")
+                if self.check_win(self.player2_hits):
+                    messagebox.showinfo("Spieler 2 gewinnt!", "Alle Schiffe von Spieler 1 sind versenkt!")
+                    self.player_guess_window.destroy()
+                else:
+                    self.send_data((x, y))
+                    self.current_player = 1  # Spielerwechsel zu Spieler 1
+                    self.player_guess_window.destroy()
+                    self.start_player_turn()
+            else:
+                self.send_data((x, y))
+        elif self.player1_board[x][y] == "O":
+            if not network:
+                btn.config(bg="black")
+            self.player1_board[x][y] = "M"  # Als Verfehlt markieren
+            if not network:
+                self.send_data((x, y))
+                self.current_player = 1  # Spielerwechsel zu Spieler 1
+                self.player_guess_window.destroy()
+                self.start_player_turn()
+            else:
+                self.send_data((x, y))
 
-    def create_guess_board(self, window, board, turn_callback):
+    def create_guess_board(self, window, board, turn_func):
         for i in range(self.size):
             for j in range(self.size):
                 btn = tk.Button(window, text="", width=2, height=1)
+                btn.config(command=lambda x=i, y=j, b=btn: turn_func(x, y, b))
                 btn.grid(row=i, column=j)
-                if board[i][j] == "H":
-                    if board == self.player2_board:
-                        btn.config(bg="blue")
-                    else:
-                        btn.config(bg="red")
-                elif board[i][j] == "M":
-                    btn.config(bg="black")
-                else:
-                    btn.config(command=lambda x=i, y=j, b=btn: turn_callback(x, y, b))
 
-    def check_win(self, hits):
-        total_ship_cells = sum(ship[0] for ship in [(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")])
-        return hits == total_ship_cells
+    def send_data(self, data):
+        self.conn.sendall(pickle.dumps(data))
+
+    def receive_data(self):
+        return pickle.loads(self.conn.recv(4096))
 
     def check_sunk_ship(self, x, y, ships):
-        for ship_name, coordinates in ships.items():
-            if (x, y) in coordinates:
-                coordinates.remove((x, y))
-                if not coordinates:
+        for ship_name, positions in ships.items():
+            if (x, y) in positions:
+                if all(self.player2_board[x][y] == "H" for x, y in positions):
                     return ship_name
         return None
 
-    def send_data(self, data):
-        if self.conn:
-            self.conn.sendall(pickle.dumps(data))
-
-    def receive_data(self):
-        if self.conn:
-            return pickle.loads(self.conn.recv(4096))
+    def check_win(self, hits):
+        return hits == sum(size for size, _ in [(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")])
 
 if __name__ == "__main__":
-    server = ShipGameServer()
+    server = ShipGameServer("localhost", 8080)
