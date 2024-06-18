@@ -7,7 +7,7 @@ class ShipGameClient:
     def __init__(self, host="localhost", port=8080):
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client_socket.connect((host, port))
-        self.start_ship_placement()
+        self.start_ship_placement_for_player2()
 
     def send_data(self, data):
         self.client_socket.sendall(pickle.dumps(data))
@@ -15,26 +15,26 @@ class ShipGameClient:
     def receive_data(self):
         return pickle.loads(self.client_socket.recv(4096))
 
-    def start_ship_placement(self):
+    def start_ship_placement_for_player2(self):
         player2 = ShipGamePlayer(player=2, placement_callback=self.player2_placed_ships)
         player2.mainloop()
 
     def player2_placed_ships(self, player, board, ships):
         self.player2_board = board
         self.player2_ships = ships
-        self.send_data((board, ships))
         print("Spieler 2 hat Schiffe platziert.")
+        self.send_data((self.player2_board, self.player2_ships))
         self.start_game_phase()
 
     def start_game_phase(self):
         data = self.receive_data()
         self.player1_board = data[0]
         self.player1_ships = data[1]
-        self.game_phase = GamePhase(size=10, player1_board=self.player1_board, player2_board=self.player2_board, player1_ships=self.player1_ships, player2_ships=self.player2_ships, server=False, conn=self.client_socket)
+        self.game_phase = GamePhase(size=10, player1_board=self.player1_board, player2_board=self.player2_board, player1_ships=self.player1_ships, player2_ships=self.player2_ships, client=True, conn=self.client_socket)
         self.game_phase.start_game()
 
 class ShipGamePlayer(tk.Tk):
-    def __init__(self, size=10, ships=[(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")], player=2, placement_callback=None):
+    def __init__(self, size=10, ships=[(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")], player=1, placement_callback=None):
         super().__init__()
         self.size = size
         self.ships = ships
@@ -108,16 +108,16 @@ class ShipGamePlayer(tk.Tk):
                 self.placement_callback(self.player, self.placedships_board, self.ship_positions)
 
 class GamePhase:
-    def __init__(self, size=10, player1_board=None, player2_board=None, player1_ships=None, player2_ships=None, server=False, conn=None):
+    def __init__(self, size=10, player1_board=None, player2_board=None, player1_ships=None, player2_ships=None, client=False, conn=None):
         self.size = size
         self.player1_board = player1_board
         self.player2_board = player2_board
         self.player1_ships = player1_ships
         self.player2_ships = player2_ships
-        self.current_player = 1
+        self.current_player = 2
         self.player1_hits = 0
         self.player2_hits = 0
-        self.server = server
+        self.client = client
         self.conn = conn
 
     def start_game(self):
@@ -130,11 +130,11 @@ class GamePhase:
             self.create_guess_board(self.player_guess_window, self.player2_board, self.player1_turn)
             self.player_guess_window.mainloop()
         else:
-            self.player_guess_window = tk.Tk()
-            if self.server:
+            if self.client:
                 data = self.receive_data()
-                self.player1_turn(data[0], data[1], None, network=True)
+                self.player2_turn(data[0], data[1], None, network=True)
             else:
+                self.player_guess_window = tk.Tk()
                 self.player_guess_window.title("Spieler 2: Schiffe erraten")
                 self.create_guess_board(self.player_guess_window, self.player1_board, self.player2_turn)
                 self.player_guess_window.mainloop()
@@ -203,11 +203,21 @@ class GamePhase:
             else:
                 self.send_data((x, y))
 
-    def create_guess_board(self, window, board, turn_func):
+    def check_sunk_ship(self, x, y, ships):
+        for name, positions in ships.items():
+            if (x, y) in positions:
+                positions.remove((x, y))
+                if not positions:
+                    return name
+        return None
+
+    def check_win(self, hits):
+        return hits == sum([size for size, _ in self.player2_ships])
+
+    def create_guess_board(self, window, board, callback):
         for i in range(self.size):
             for j in range(self.size):
-                btn = tk.Button(window, text="", width=2, height=1)
-                btn.config(command=lambda x=i, y=j, b=btn: turn_func(x, y, b))
+                btn = tk.Button(window, text="", width=2, height=1, command=lambda x=i, y=j, b=btn: callback(x, y, b))
                 btn.grid(row=i, column=j)
 
     def send_data(self, data):
@@ -216,15 +226,5 @@ class GamePhase:
     def receive_data(self):
         return pickle.loads(self.conn.recv(4096))
 
-    def check_sunk_ship(self, x, y, ships):
-        for ship_name, positions in ships.items():
-            if (x, y) in positions:
-                if all(self.player2_board[x][y] == "H" for x, y in positions):
-                    return ship_name
-        return None
-
-    def check_win(self, hits):
-        return hits == sum(size for size, _ in [(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")])
-
 if __name__ == "__main__":
-    client = ShipGameClient("localhost", 8080)
+    client = ShipGameClient()
