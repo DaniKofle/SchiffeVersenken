@@ -1,33 +1,56 @@
 import socket
 import threading
+import pickle
 import tkinter as tk
 from tkinter import messagebox
 
-class ShipGameServer(tk.Tk):
-    def __init__(self, host, port):
+class ShipGameServer:
+    def __init__(self, host='127.0.0.1', port=8080):
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.bind((host, port))
+        self.server_socket.listen(1)
+        print("Warte auf Verbindung von Client...")
+        self.conn, self.addr = self.server_socket.accept()
+        print(f"Verbunden mit: {self.addr}")
+        self.start_ship_placement_for_player1()
+
+    def send_data(self, data):
+        self.conn.sendall(pickle.dumps(data))
+
+    def receive_data(self):
+        return pickle.loads(self.conn.recv(4096))
+
+    def start_ship_placement_for_player1(self):
+        player1 = ShipGamePlayer(player=1, placement_callback=self.player1_placed_ships)
+        player1.mainloop()
+
+    def player1_placed_ships(self, player, board, ships):
+        self.player1_board = board
+        self.player1_ships = ships
+        print("Spieler 1 hat Schiffe platziert.")
+        self.send_data((board, ships))
+        self.start_game_phase()
+
+    def start_game_phase(self):
+        data = self.receive_data()
+        self.player2_board = data[0]
+        self.player2_ships = data[1]
+        self.game_phase = GamePhase(size=10, player1_board=self.player1_board, player2_board=self.player2_board, player1_ships=self.player1_ships, player2_ships=self.player2_ships, server=True, conn=self.conn)
+        self.game_phase.start_game()
+
+class ShipGamePlayer(tk.Tk):
+    def __init__(self, size=10, ships=[(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")], player=1, placement_callback=None):
         super().__init__()
-        self.host = host
-        self.port = port
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind((self.host, self.port))
-        self.sock.listen(1)
-        self.conn, self.addr = None, None
-        
-        self.size = 10
-        self.ships = [(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")]
-        self.player = 1
+        self.size = size
+        self.ships = ships
+        self.player = player
+        self.title(f"Spieler {self.player}: Schiffe platzieren")
         self.current_ship_index = 0
         self.current_ship_size, self.current_ship_name = self.ships[self.current_ship_index]
         self.placedships_board = [["O" for _ in range(self.size)] for _ in range(self.size)]
         self.ship_positions = {name: [] for _, name in self.ships}
+        self.placement_callback = placement_callback
         self.create_widgets()
-        
-        threading.Thread(target=self.wait_for_connection, daemon=True).start()
-
-    def wait_for_connection(self):
-        self.conn, self.addr = self.sock.accept()
-        print(f"Connected by {self.addr}")
-        threading.Thread(target=self.receive_data, daemon=True).start()
 
     def create_widgets(self):
         self.buttons = []
@@ -65,14 +88,18 @@ class ShipGameServer(tk.Tk):
         for i in range(size):
             if x + size <= self.size:
                 self.placedships_board[x + i][y] = "S"
-                self.buttons[x + i][y].config(bg="red")
+                self.buttons[x + i][y].config(bg="red" if self.player == 1 else "blue")
                 positions.append((x + i, y))
             elif y + size <= self.size:
                 self.placedships_board[x][y + i] = "S"
-                self.buttons[x][y + i].config(bg="red")
+                self.buttons[x][y + i].config(bg="red" if self.player == 1 else "blue")
                 positions.append((x, y + i))
         self.ship_positions[self.current_ship_name] = positions
-        self.check_all_ships_placed()
+        if all(len(row) == self.size and row.count("S") == size for row in self.placedships_board):
+            messagebox.showinfo("Fertig!", f"Spieler {self.player} hat alle Schiffe platziert.")
+            self.destroy()
+            if self.placement_callback:
+                self.placement_callback(self.player, self.placedships_board, self.ship_positions)
 
     def next_ship(self):
         self.current_ship_index += 1
@@ -80,61 +107,74 @@ class ShipGameServer(tk.Tk):
             self.current_ship_size, self.current_ship_name = self.ships[self.current_ship_index]
             self.info_label.config(text=f"Platziere dein {self.current_ship_name} ({self.current_ship_size} Felder)")
         else:
-            self.check_all_ships_placed()
-
-    def check_all_ships_placed(self):
-        if self.current_ship_index >= len(self.ships):
             messagebox.showinfo("Fertig!", f"Spieler {self.player} hat alle Schiffe platziert.")
-            self.send_data("PLACEMENT", self.placedships_board, self.ship_positions)
             self.destroy()
+            if self.placement_callback:
+                self.placement_callback(self.player, self.placedships_board, self.ship_positions)
 
-    def send_data(self, data_type, board, positions):
-        if self.conn:
-            data = f"{data_type}|{board}|{positions}"
-            self.conn.sendall(data.encode())
-
-    def receive_data(self):
-        while True:
-            data = self.conn.recv(1024).decode()
-            if not data:
-                break
-            data_type, board, positions = data.split("|")
-            if data_type == "PLACEMENT":
-                self.start_game_phase(board, positions)
-
-    def start_game_phase(self, board, positions):
-        self.player2_board = eval(board)
-        self.player2_ships = eval(positions)
-        self.start_game()
+class GamePhase:
+    def __init__(self, size=10, player1_board=None, player2_board=None, player1_ships=None, player2_ships=None, server=False, conn=None):
+        self.size = size
+        self.player1_board = player1_board
+        self.player2_board = player2_board
+        self.player1_ships = player1_ships
+        self.player2_ships = player2_ships
+        self.current_player = 1
+        self.player1_hits = 0
+        self.player2_hits = 0
+        self.server = server
+        self.conn = conn
 
     def start_game(self):
-        self.player_guess_window = tk.Tk()
-        self.player_guess_window.title("Spieler 1: Schiffe erraten")
-        self.create_guess_board(self.player_guess_window, self.player2_board, self.player1_turn)
+        self.start_player_turn()
+
+    def start_player_turn(self):
+        if self.current_player == 1:
+            self.player_guess_window = tk.Tk()
+            self.player_guess_window.title("Spieler 1: Schiffe erraten")
+            self.create_guess_board(self.player_guess_window, self.player2_board, self.player1_turn)
+        else:
+            if self.server:
+                data = self.receive_data()
+                self.player1_turn(data[0], data[1], None, network=True)
+            else:
+                self.player_guess_window = tk.Tk()
+                self.player_guess_window.title("Spieler 2: Schiffe erraten")
+                self.create_guess_board(self.player_guess_window, self.player1_board, self.player2_turn)
         self.player_guess_window.mainloop()
 
-    def player1_turn(self, x, y, btn):
+    def player1_turn(self, x, y, btn, network=False):
         if self.player2_board[x][y] == "S":
-            btn.config(bg="blue")
-            messagebox.showinfo("Treffer!", "Versenkt!")
+            if not network:
+                btn.config(bg="blue")
             self.player2_board[x][y] = "H"
+            self.player1_hits += 1
             ship_name = self.check_sunk_ship(x, y, self.player2_ships)
-            if ship_name:
-                messagebox.showinfo("Versenkt!", f"{ship_name} versenkt!")
-            self.send_data("HIT", self.player2_board, (x, y))
-            if self.check_win():
-                messagebox.showinfo("Spieler 1 gewinnt!", "Alle Schiffe von Spieler 2 sind versenkt!")
-                self.player_guess_window.destroy()
+            if not network:
+                if ship_name:
+                    messagebox.showinfo("Versenkt!", f"{ship_name} versenkt!")
+                if self.check_win(self.player1_hits):
+                    messagebox.showinfo("Spieler 1 gewinnt!", "Alle Schiffe von Spieler 2 sind versenkt!")
+                    self.player_guess_window.destroy()
+                else:
+                    self.current_player = 1  # Spieler 1 geht weiter
+                    self.player_guess_window.destroy()
+                    self.start_player_turn()
             else:
-                self.player_guess_window.destroy()
-                self.start_game()
+                self.send_data((x, y))
         elif self.player2_board[x][y] == "O":
-            btn.config(bg="black")
-            messagebox.showinfo("Fehler!", "Verfehlt")
-            self.player2_board[x][y] = "M"
-            self.send_data("MISS", self.player2_board, (x, y))
-            self.player_guess_window.destroy()
-            self.start_game()
+            if not network:
+                btn.config(bg="black")
+            self.player2_board[x][y] = "M"  # Als Verfehlt markieren
+            if not network:
+                self.current_player = 2  # Spieler 2 geht weiter
+                self.player_guess_window.destroy()
+                self.start_player_turn()
+            else:
+                self.send_data((x, y))
+
+    def player2_turn(self, x, y, btn):
+        self.send_data((x, y))
 
     def create_guess_board(self, window, board, turn_callback):
         for i in range(self.size):
@@ -142,16 +182,18 @@ class ShipGameServer(tk.Tk):
                 btn = tk.Button(window, text="", width=2, height=1)
                 btn.grid(row=i, column=j)
                 if board[i][j] == "H":
-                    btn.config(bg="blue")
+                    if board == self.player2_board:
+                        btn.config(bg="blue")
+                    else:
+                        btn.config(bg="red")
                 elif board[i][j] == "M":
                     btn.config(bg="black")
                 else:
                     btn.config(command=lambda x=i, y=j, b=btn: turn_callback(x, y, b))
 
-    def check_win(self):
-        total_ship_cells = sum(ship[0] for ship in self.ships)
-        player1_hits = sum(row.count("H") for row in self.player2_board)
-        return player1_hits == total_ship_cells
+    def check_win(self, hits):
+        total_ship_cells = sum(ship[0] for ship in [(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")])
+        return hits == total_ship_cells
 
     def check_sunk_ship(self, x, y, ships):
         for ship_name, coordinates in ships.items():
@@ -161,8 +203,13 @@ class ShipGameServer(tk.Tk):
                     return ship_name
         return None
 
+    def send_data(self, data):
+        if self.conn:
+            self.conn.sendall(pickle.dumps(data))
+
+    def receive_data(self):
+        if self.conn:
+            return pickle.loads(self.conn.recv(4096))
+
 if __name__ == "__main__":
-    host = 'localhost'
-    port = 5000
-    server = ShipGameServer(host, port)
-    server.mainloop()
+    server = ShipGameServer()
