@@ -2,7 +2,7 @@ import socket
 import threading
 
 class BattleshipServer:
-    def __init__(self, host='127.0.0.1', port=5555):
+    def __init__(self, host='192.168.5.143', port=5555):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((host, port))
         self.server.listen(2)

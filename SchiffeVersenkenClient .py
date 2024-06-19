@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 class BattleshipClient:
-    def __init__(self, host='127.0.0.1', port=5555):
+    def __init__(self, host='192.168.5.143', port=5555):
         print("Initializing BattleshipClient...")
         self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client.connect((host, port))
