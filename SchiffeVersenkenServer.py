@@ -56,9 +56,10 @@ class BattleshipServer:
         opponent_positions = self.ship_positions[opponent_id]
         guess_result = "HIT" if f"{row}:{col}" in opponent_positions else "MISS"
 
+        # Send the result to the player who made the guess
         self.clients[player_id].sendall(f"RESULT:{row},{col},{guess_result}\n".encode())
-        self.clients[opponent_id].sendall(f"RESULT:{row},{col},{guess_result}\n".encode())
 
+        # Notify the opponent if their ship was hit
         if guess_result == "HIT":
             self.clients[opponent_id].sendall(f"HIT_ON_SHIP:{row},{col}\n".encode())
 
@@ -67,6 +68,7 @@ class BattleshipServer:
 
         self.clients[self.current_turn].sendall("TURN:YES\n".encode())
         self.clients[1 - self.current_turn].sendall("TURN:NO\n".encode())
+
 
     def start(self):
         player_id = 0
