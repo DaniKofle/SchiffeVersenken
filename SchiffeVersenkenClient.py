@@ -2,37 +2,30 @@ import socket
 import threading
 import tkinter as tk
 from tkinter import messagebox
-import pickle
 
 class BattleshipClient:
-    def __init__(self, host='192.168.5.179', port=5555):
+    def __init__(self, host='127.0.0.1', port=5555):
         print("Initializing BattleshipClient...")
         self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client.connect((host, port))
 
-        self.player_id = None  # New attribute to identify player (1 or 2)
-        self.player_color = None  # Player color
+        self.player_id = None
+        self.player_color = None
         self.opponent_ship_positions = []
         self.is_my_turn = False
-        self.guess_window_player_1 = None
-        self.guess_window_player_2 = None
-        self.guess_buttons1 = []  # Updated variable for player 1 guess buttons
-        self.guess_buttons2 = []  # Updated variable for player 2 guess buttons
-        self.local_guesses_player_1 = []  # Local storage for player 1 guesses
-        self.local_guesses_player_2 = []  # Local storage for player 2 guesses
-        self.received_opponent_positions = False
+        self.grid_size = 10
+        self.ship_sizes = [4, 3, 2, 1]
+        self.ship_names = ["Flugzeugträger", "Kreuzer", "Schiff", "Fischerboot"]
+        self.current_ship_index = 0
+        self.all_ship_positions = []
+
         threading.Thread(target=self.receive_messages).start()
 
         self.window = tk.Tk()
         self.window.title("Battleship - Place Your Ships")
 
-        self.grid_size = 10
-        self.ship_sizes = [4, 3, 2, 1]  # Flugzeugträger, Kreuzer, Schiff, Fischerboot
-        self.ship_names = ["Flugzeugträger", "Kreuzer", "Schiff", "Fischerboot"]
-        self.current_ship_index = 0
-        self.all_ship_positions = []
-
         self.create_widgets()
+        self.create_guess_window()
         self.window.mainloop()
 
     def create_widgets(self):
@@ -47,6 +40,21 @@ class BattleshipClient:
 
         self.info_label = tk.Label(self.window, text=f"Place your {self.ship_names[self.current_ship_index]} of size {self.ship_sizes[self.current_ship_index]}")
         self.info_label.grid(row=self.grid_size, column=0, columnspan=self.grid_size)
+
+    def create_guess_window(self):
+        self.guess_window = tk.Toplevel(self.window)
+        self.guess_window.title("Battleship - Guessing Board")
+
+        self.guess_buttons = []
+        for row in range(self.grid_size):
+            button_row = []
+            for col in range(self.grid_size):
+                button = tk.Button(self.guess_window, width=2, height=1, command=lambda r=row, c=col: self.make_guess(r, c))
+                button.grid(row=row, column=col)
+                button_row.append(button)
+            self.guess_buttons.append(button_row)
+
+        self.guess_window.withdraw()
 
     def place_ship(self, row, col):
         ship_size = self.ship_sizes[self.current_ship_index]
@@ -69,133 +77,78 @@ class BattleshipClient:
             for row in self.buttons:
                 for button in row:
                     button.config(state='disabled')
-            self.window.after(2000, self.window.destroy)  # Close the window after 2 seconds
 
     def send_ship_positions(self):
         positions_str = ",".join([f"{r}:{c}" for r, c in self.all_ship_positions])
-        print(f"Sending ship positions to server: {positions_str}")  # Debug-Ausgabe im Client
-        self.client.sendall(f"SHIP_POSITIONS:{positions_str}".encode())
+        print(f"Sending ship positions to server: {positions_str}")
+        self.client.sendall(f"SHIP_POSITIONS:{positions_str}\n".encode())
 
     def receive_messages(self):
+        buffer = ""
         while True:
             try:
-                msg = self.client.recv(1024).decode()
-                messages = msg.split("WELCOME:")
-                for m in messages:
-                    if m.startswith("COLOR:"):
-                        self.player_color = m.split(":")[1]
-                        print(f"Set player_color to {self.player_color}")  # Debug-Ausgabe
-                    elif m.startswith("PLAYER_ID:"):
-                        self.player_id = int(m.split(":")[1])
-                        print(f"Set player_id to {self.player_id}")  # Debug-Ausgabe
-                        self.check_start_guessing_phase()  # Überprüfen, ob die Ratephase gestartet werden kann
-                    elif "Welcome" in m:
-                        print(f"Welcome message: {m}")  # Print the welcome message
-                    elif m.startswith("OPPONENT_SHIP_POSITIONS:"):
-                        self.opponent_ship_positions = [tuple(map(int, pos.split(":"))) for pos in m[len("OPPONENT_SHIP_POSITIONS:"):].split(",")]
-                        print(f"Received opponent's ship positions: {self.opponent_ship_positions}")  # Debug-Ausgabe im Client
-                        self.received_opponent_positions = True
-                        self.check_start_guessing_phase()  # Überprüfen, ob die Ratephase gestartet werden kann
-                    elif m.startswith("TURN:"):
-                        self.is_my_turn = True if m.split(":")[1] == "YES" else False
-                        print(f"Set is_my_turn to {self.is_my_turn}")  # Debug-Ausgabe
-                        self.update_guess_window()
-                    elif m.startswith("RESULT:"):
-                        self.process_result(m[len("RESULT:"):])
-                    else:
-                        print(m)
+                buffer += self.client.recv(1024).decode()
+                while '\n' in buffer:
+                    msg, buffer = buffer.split('\n', 1)
+                    self.handle_message(msg)
             except Exception as e:
                 print(f"Error: {e}")
                 break
 
-    def check_start_guessing_phase(self):
-        if self.player_id is not None and self.received_opponent_positions:
-            self.start_guessing_phase()
-
-    def start_guessing_phase(self):
-        print(f"Starting guessing phase for player {self.player_id}...")  # Debug-Ausgabe
-        if self.player_id == 1 and self.guess_window_player_1 is None:
-            print("Creating guess window for player 1")  # Debug-Ausgabe
-            self.guess_window_player_1 = tk.Toplevel(self.window)
-            self.guess_window_player_1.title("Battleship - Player 1 Guessing Board")
-            self.guess_buttons1 = self.create_guess_buttons(self.guess_window_player_1, 1)
-
-            print("Guess window for player 1 created")  # Debug-Ausgabe
-            self.guess_window_player_1.withdraw()  # Fenster zunächst ausblenden
-
-        if self.player_id == 2 and self.guess_window_player_2 is None:
-            print("Creating guess window for player 2")  # Debug-Ausgabe
-            self.guess_window_player_2 = tk.Toplevel(self.window)
-            self.guess_window_player_2.title("Battleship - Player 2 Guessing Board")
-            self.guess_buttons2 = self.create_guess_buttons(self.guess_window_player_2, 2)
-
-            print("Guess window for player 2 created")  # Debug-Ausgabe
-            self.guess_window_player_2.withdraw()  # Fenster zunächst ausblenden
-
-        self.update_guess_window()
-
-    def create_guess_buttons(self, guess_window, player_id):
-        guess_buttons = []
-        for row in range(self.grid_size):
-            button_row = []
-            for col in range(self.grid_size):
-                button = tk.Button(guess_window, width=2, height=1, command=lambda r=row, c=col: self.make_guess(r, c, player_id))
-                button.grid(row=row, column=col)
-                button_row.append(button)
-            guess_buttons.append(button_row)
-        return guess_buttons
+    def handle_message(self, msg):
+        if msg.startswith("PLAYER_ID:"):
+            self.player_id = int(msg.split(":")[1])
+            print(f"Set player_id to {self.player_id}")
+        elif msg.startswith("COLOR:"):
+            self.player_color = msg.split(":")[1]
+            print(f"Set player_color to {self.player_color}")
+        elif msg.startswith("WELCOME:"):
+            print(msg)
+        elif msg.startswith("OPPONENT_SHIP_POSITIONS:"):
+            self.opponent_ship_positions = [tuple(map(int, pos.split(":"))) for pos in msg[len("OPPONENT_SHIP_POSITIONS:"):].split(",")]
+            print(f"Received opponent's ship positions: {self.opponent_ship_positions}")
+        elif msg.startswith("TURN:"):
+            self.is_my_turn = True if msg.split(":")[1] == "YES" else False
+            print(f"Set is_my_turn to {self.is_my_turn}")
+            self.update_guess_window()
+        elif msg.startswith("RESULT:"):
+            self.process_result(msg[len("RESULT:"):])
+        elif msg.startswith("HIT_ON_SHIP:"):
+            self.mark_hit_on_ship(msg[len("HIT_ON_SHIP:"):])
+        else:
+            print(msg)
 
     def update_guess_window(self):
         if self.player_id is None:
-            print("Player ID is not set. Skipping update_guess_window.")  # Debug-Ausgabe
+            print("Player ID is not set. Skipping update_guess_window.")
             return
 
-        print(f"Updating guess window for player {self.player_id}, is_my_turn: {self.is_my_turn}")  # Debug-Ausgabe
-        if self.player_id == 1 and self.guess_window_player_1 is not None:
-            print("Updating guess window for player 1")  # Debug-Ausgabe
-            if self.is_my_turn:
-                print("Player 1's turn, showing guess window")  # Debug-Ausgabe
-                self.guess_window_player_1.deiconify()
-            else:
-                print("Not player 1's turn, hiding guess window")  # Debug-Ausgabe
-                self.guess_window_player_1.withdraw()
-
-        elif self.player_id == 2 and self.guess_window_player_2 is not None:
-            print("Updating guess window for player 2")  # Debug-Ausgabe
-            if self.is_my_turn:
-                print("Player 2's turn, showing guess window")  # Debug-Ausgabe
-                self.guess_window_player_2.deiconify()
-            else:
-                print("Not player 2's turn, hiding guess window")  # Debug-Ausgabe
-                self.guess_window_player_2.withdraw()
-
-    def make_guess(self, row, col, player_id):
-        guess = (row, col)
-        if player_id == 1:
-            if guess not in self.local_guesses_player_1:
-                self.local_guesses_player_1.append(guess)
-                hit = guess in self.opponent_ship_positions
-                self.guess_buttons1[row][col].config(state='disabled', bg='blue' if hit else 'black')
-                self.client.sendall(f"GUESS:{row}:{col}".encode())
-                self.show_result_message(hit)
-        elif player_id == 2:
-            if guess not in self.local_guesses_player_2:
-                self.local_guesses_player_2.append(guess)
-                hit = guess in self.opponent_ship_positions
-                self.guess_buttons2[row][col].config(state='disabled', bg='blue' if hit else 'black')
-                self.client.sendall(f"GUESS:{row}:{col}".encode())
-                self.show_result_message(hit)
-
-    def show_result_message(self, hit):
-        if hit:
-            messagebox.showinfo("Result", "Treffer!")
+        if self.is_my_turn:
+            self.guess_window.deiconify()
         else:
-            messagebox.showinfo("Result", "Verfehlt!")
+            self.guess_window.withdraw()
+
+    def make_guess(self, row, col):
+        if self.is_my_turn:
+            print(f"Making guess: ({row}, {col})")
+            self.client.sendall(f"GUESS:{row}:{col}\n".encode())
+            self.is_my_turn = False
 
     def process_result(self, result):
-        # Placeholder for processing results received from the server
-        pass
+        row, col, hit = result.split(",")
+        row, col = int(row), int(col)
+        print(f"Processing result: ({row}, {col}), hit: {hit}")
+
+        if hit == "HIT":
+            self.guess_buttons[row][col].config(bg='red')
+            messagebox.showinfo("Result", "Treffer!")
+        else:
+            self.guess_buttons[row][col].config(bg='black')
+            messagebox.showinfo("Result", "Verfehlt!")
+
+    def mark_hit_on_ship(self, hit_info):
+        row, col = map(int, hit_info.split(","))
+        self.buttons[row][col].config(bg='red')
 
 if __name__ == "__main__":
     client = BattleshipClient()
-
