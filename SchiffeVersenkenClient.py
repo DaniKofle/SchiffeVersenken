@@ -3,6 +3,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox
 
+
 class BattleshipClient:
     def __init__(self, host='127.0.0.1', port=5555):
         print("Initializing BattleshipClient...")
