@@ -146,7 +146,7 @@ class GamePhase:
         elif self.player1_board[x][y] == "O":
             btn.config(bg="black")
             messagebox.showinfo("Fehler!", "Verfehlt")
-            self.player1_board[x][y] = "M"  # Mark as miss
+            self.player1_board[x][y] = "M"  # Mark as miss 
             self.current_player = 1  # Spielerwechsel
             self.player_guess_window.destroy()
             self.start_player_turn()
