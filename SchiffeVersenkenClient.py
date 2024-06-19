@@ -54,8 +54,6 @@ class BattleshipClient:
                 button_row.append(button)
             self.guess_buttons.append(button_row)
 
-        self.guess_window.withdraw()
-
     def place_ship(self, row, col):
         ship_size = self.ship_sizes[self.current_ship_index]
         if row + ship_size > self.grid_size:
@@ -119,14 +117,14 @@ class BattleshipClient:
             print(msg)
 
     def update_guess_window(self):
-        if self.player_id is None:
-            print("Player ID is not set. Skipping update_guess_window.")
-            return
-
         if self.is_my_turn:
-            self.guess_window.deiconify()
+            for row in self.guess_buttons:
+                for button in row:
+                    button.config(state='normal')
         else:
-            self.guess_window.withdraw()
+            for row in self.guess_buttons:
+                for button in row:
+                    button.config(state='disabled')
 
     def make_guess(self, row, col):
         if self.is_my_turn:
