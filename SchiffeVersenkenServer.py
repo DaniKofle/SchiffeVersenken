@@ -1,110 +1,103 @@
 import socket
-import pickle
 import threading
 
-class GameServer:
-    def __init__(self, host='10.10.218.24', port=8080):
-        self.host = host
-        self.port = port
+class BattleshipServer:
+    def __init__(self, host='192.168.5.179', port=5555):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.bind((self.host, self.port))
+        self.server.bind((host, port))
         self.server.listen(2)
-        self.connections = []
-        self.boards = [None, None]
-        self.ships = [None, None]
-        self.current_player = 0
-        self.hits = [0, 0]
+        print("Server started, waiting for players to connect...")
 
-    def start(self):
-        print("Server started, waiting for connections...")
-        while len(self.connections) < 2:
-            conn, addr = self.server.accept()
-            print(f"Connected to: {addr}")
-            self.connections.append(conn)
-            threading.Thread(target=self.handle_client, args=(conn, len(self.connections)-1)).start()
+        self.clients = []
+        self.lock = threading.Lock()
+        self.ship_positions_player_1 = None
+        self.ship_positions_player_2 = None
+        self.current_turn = 0  # 0 for player 1, 1 for player 2
 
-        print("Both players connected. Waiting for ship placement...")
+    def handle_client(self, client, player_id):
+        colors = ['red', 'blue']
+        client.sendall(f"COLOR:{colors[player_id-1]}".encode())
+        client.sendall(f"Welcome Player {player_id}".encode())
 
-    def send_all(self, message, data=None):
-        for conn in self.connections:
-            try:
-                conn.send(pickle.dumps((message, data)))
-            except:
-                print(f"Error sending message to player {self.connections.index(conn)+1}")
-                conn.close()
-                self.connections.remove(conn)
-
-    def send_to_player(self, player, message, data=None):
-        try:
-            self.connections[player].send(pickle.dumps((message, data)))
-        except:
-            print(f"Error sending message to player {player+1}")
-            self.connections[player].close()
-            self.connections.remove(self.connections[player])
-
-    def handle_client(self, conn, player):
         while True:
             try:
-                data = pickle.loads(conn.recv(4096))
-                if data:
-                    self.handle_message(player, data)
-            except:
-                print(f"Player {player+1} disconnected")
-                self.connections.remove(conn)
+                msg = client.recv(1024).decode()
+                if msg.startswith("SHIP_POSITIONS:"):
+                    positions = msg[len("SHIP_POSITIONS:"):]
+                    if player_id == 1:
+                        self.ship_positions_player_1 = positions
+                        print(f"Received ship positions from Player 1: {self.ship_positions_player_1}")
+                    elif player_id == 2:
+                        self.ship_positions_player_2 = positions
+                        print(f"Received ship positions from Player 2: {self.ship_positions_player_2}")
+
+                    self.print_boards()  # Print boards for debugging
+
+                    if self.ship_positions_player_1 and self.ship_positions_player_2:
+                        self.send_opponent_positions()
+                        self.start_game()
+                elif msg.startswith("GUESS:"):
+                    guess = msg[len("GUESS:"):].split(":")
+                    row, col = int(guess[0]), int(guess[1])
+                    self.process_guess(player_id, row, col)
+                else:
+                    self.broadcast(msg, client)
+            except Exception as e:
+                print(f"Error: {e}")
                 break
 
-    def handle_message(self, player, message):
-        command, data = message
-        if command == "place_ship":
-            self.boards[player], self.ships[player] = data
-            print(f"Player {player+1} has placed their ships.")
-            if all(self.boards):
-                self.send_boards()
-                self.send_all("both_boards_placed")
-                self.send_all("player_turn", self.current_player)
-        elif command == "guess":
-            x, y = data
-            opponent = 1 if player == 0 else 0
-            board = self.boards[opponent]
-            result = "miss"
-            if board[x][y] == "S":
-                result = "hit"
-                board[x][y] = "H"
-                self.hits[player] += 1
-                ship_name = self.check_sunk_ship(x, y, self.ships[opponent])
-                if ship_name:
-                    result = f"sunk {ship_name}"
-                if self.check_win(self.hits[player]):
-                    self.send_all("win", player)
-                    return
-            else:
-                board[x][y] = "M"
-                self.current_player = opponent
+        with self.lock:
+            self.clients.remove(client)
+        client.close()
 
-            self.send_to_player(player, "guess_result", (player, x, y, result))
-            self.send_to_player(opponent, "guess_result", (player, x, y, result))
-            if result == "miss":
-                self.send_all("player_turn", self.current_player)
-            else:
-                self.send_to_player(player, "player_turn", player)
+    def broadcast(self, msg, sender_client):
+        with self.lock:
+            for client in self.clients:
+                if client != sender_client:
+                    client.sendall(msg.encode())
 
-    def send_boards(self):
-        for i, conn in enumerate(self.connections):
-            opponent_board = self.boards[1 - i]
-            conn.send(pickle.dumps(("set_guess_board", opponent_board)))
+    def send_opponent_positions(self):
+        self.clients[0].sendall(f"OPPONENT_SHIP_POSITIONS:{self.ship_positions_player_2}".encode())
+        self.clients[1].sendall(f"OPPONENT_SHIP_POSITIONS:{self.ship_positions_player_1}".encode())
+        print(f"Sent Player 1's positions to Player 2: {self.ship_positions_player_1}")
+        print(f"Sent Player 2's positions to Player 1: {self.ship_positions_player_2}")
 
-    def check_win(self, hits):
-        total_ship_cells = sum(ship[0] for ship in [(4, "Flugzeugträger"), (3, "Schlachtschiff"), (2, "U-Boot"), (1, "Fischerboot")])
-        return hits == total_ship_cells
+    def start_game(self):
+        self.clients[0].sendall("TURN:YES".encode())  # Player 1 starts
+        self.clients[1].sendall("TURN:NO".encode())
 
-    def check_sunk_ship(self, x, y, ships):
-        for ship_name, coordinates in ships.items():
-            if (x, y) in coordinates:
-                coordinates.remove((x, y))
-                if not coordinates:
-                    return ship_name
-        return None
+    def process_guess(self, player_id, row, col):
+        opponent_id = 2 if player_id == 1 else 1
+        opponent_positions = self.ship_positions_player_2 if player_id == 1 else self.ship_positions_player_1
+        guess_result = "HIT" if f"{row}:{col}" in opponent_positions else "MISS"
+
+        self.clients[player_id-1].sendall(f"RESULT:{row},{col},{guess_result}".encode())
+        self.clients[opponent_id-1].sendall(f"RESULT:{row},{col},{guess_result}".encode())
+
+        if guess_result == "MISS":
+            # Switch turn only if the guess was a miss
+            self.current_turn = 1 if self.current_turn == 0 else 0
+
+        self.clients[self.current_turn].sendall("TURN:YES".encode())
+        self.clients[1 - self.current_turn].sendall("TURN:NO".encode())
+
+    def print_boards(self):
+        if self.ship_positions_player_1:
+            print("Player 1's Board:")
+            print(self.ship_positions_player_1)
+        if self.ship_positions_player_2:
+            print("Player 2's Board:")
+            print(self.ship_positions_player_2)
+
+    def start(self):
+        player_id = 1
+        while len(self.clients) < 2:
+            client, addr = self.server.accept()
+            self.clients.append(client)
+            threading.Thread(target=self.handle_client, args=(client, player_id)).start()
+            print(f"Player {player_id} connected from {addr}")
+            player_id += 1
 
 if __name__ == "__main__":
-    server = GameServer()
+    server = BattleshipServer()
     server.start()
